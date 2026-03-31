@@ -1,0 +1,7 @@
+[package]
+name = "epfl_sumcheck"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+efficient-sumcheck = { git = "https://github.com/compsec-epfl/efficient-sumcheck", version = "0.0.2" }
