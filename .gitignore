@@ -1,0 +1,9 @@
+# Rust build artifacts
+code/candidate/*/target/
+
+# Lean build artifacts
+code/sumcheck-lean4/.lake/
+
+# Python
+__pycache__/
+*.pyc

@@ -254,6 +254,8 @@ dependencies = [
 name = "epfl_sumcheck"
 version = "0.1.0"
 dependencies = [
+ "ark-ff",
+ "ark-std",
  "efficient-sumcheck",
 ]
 

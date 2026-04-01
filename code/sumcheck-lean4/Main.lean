@@ -49,6 +49,17 @@ def main : IO Unit := do
 
   let examplePoly := CPoly.Lawful.fromUnlawful poly
 
+  -- sum poly over boolDomain^n
+  let initialClaim : ZMod 19 :=
+    sum_over_domain_recursive
+      boolDomain
+      (add := (· + ·))
+      (zero := 0)
+      (m := n)
+      (F := fun b =>
+        CPoly.CMvPolynomial.eval₂ (RingHom.id _)
+          (fun i => b i) examplePoly)
+
   -- parse challenges
   let challengeLine := lines[2 + numTerms]!
   let challengeVals := parseNatList challengeLine
@@ -61,7 +72,7 @@ def main : IO Unit := do
       (𝔽 := ZMod 19)
       boolDomain
       examplePoly
-      0
+      (honest_claim boolDomain examplePoly)
       challenges
 
   IO.println "=== SUMCHECK TRANSCRIPT ==="
