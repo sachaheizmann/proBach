@@ -2,10 +2,9 @@
 code/candidate/*/target/
 
 # Lean build artifacts
-code/sumcheck-lean4/.lake/
+code/lean/.lake/
+code/lean/lake-manifest.json
 
 # Python
 __pycache__/
 *.pyc
-
-code/fuzzer/fuzzer_results.txt
