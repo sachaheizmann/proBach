@@ -1,24 +1,24 @@
 import Sumcheck.Src.Transcript
+import Sumcheck.Src.Hypercube
 import CompPoly.Multivariate.CMvPolynomial
 import Mathlib.Data.ZMod.Basic
+import Mathlib.FieldTheory.Finite.Basic
 import Std
 
-instance : Fact (Nat.Prime 19) := ⟨by decide⟩
+axiom mersenne31_prime : Nat.Prime 2147483647
+instance : Fact (Nat.Prime 2147483647) := ⟨mersenne31_prime⟩
 
 set_option maxHeartbeats 10000000
-
 open Std
 
-def boolDomain : List (ZMod 19) := [0,1]
+def boolDomainM31 : List (ZMod 2147483647) := [0,1]
 
-
-def parseNatList (s : String) : List Nat :=
+def parseNatListM31 (s : String) : List Nat :=
   s.splitOn " " |>.filterMap String.toNat?
 
 def main : IO Unit := do
   let stdin ← IO.getStdin
   let content ← stdin.readToEnd
-  -- split into test cases by "---" delimiter
   let testCases := content.splitOn "---"
     |>.map String.trim
     |>.filter (· ≠ "")
@@ -27,16 +27,13 @@ def main : IO Unit := do
     idx := idx + 1
     IO.println s!"=== TEST {idx} ==="
     let lines := (tc.splitOn "\n" |>.filter (· ≠ "")).toArray
-    -- parse n
     let n := (lines[0]!).toNat!
-    -- parse number of terms
     let numTerms := (lines[1]!).toNat!
-    -- parse polynomial
     let termLines := (lines.toList.drop 2 |>.take numTerms)
-    let mut poly : CPoly.Unlawful n (ZMod 19) := 0
+    let mut poly : CPoly.Unlawful n (ZMod 2147483647) := 0
     for line in termLines do
-      let nums := parseNatList line
-      let coeff := (nums[0]! : ZMod 19)
+      let nums := parseNatListM31 line
+      let coeff := (nums[0]! : ZMod 2147483647)
       let raw := nums.drop 1
       let exponents :=
         (List.range n).map (fun i => raw.getD i 0) |>.toArray
@@ -45,15 +42,15 @@ def main : IO Unit := do
       poly := poly.insert mon coeff
     let examplePoly := CPoly.Lawful.fromUnlawful poly
     let challengeLine := lines[2 + numTerms]!
-    let challengeVals := parseNatList challengeLine
-    let challenges : Fin n → ZMod 19 :=
-      fun i => (challengeVals[i.val]! : ZMod 19)
+    let challengeVals := parseNatListM31 challengeLine
+    let challenges : Fin n → ZMod 2147483647 :=
+      fun i => (challengeVals[i.val]! : ZMod 2147483647)
     let transcript :=
       generate_honest_transcript
-        (𝔽 := ZMod 19)
-        boolDomain
+        (𝔽 := ZMod 2147483647)
+        boolDomainM31
         examplePoly
-        (honest_claim boolDomain examplePoly)
+        (honest_claim boolDomainM31 examplePoly)
         challenges
     IO.println "=== SUMCHECK TRANSCRIPT ==="
     IO.print "claims: ["
@@ -70,7 +67,7 @@ def main : IO Unit := do
     IO.println "]"
     for i in List.finRange n do
       let p := transcript.round_polys i
-      let v0 := CPoly.CMvPolynomial.eval₂ (RingHom.id _) (fun _ => (0 : ZMod 19)) p
-      let v1 := CPoly.CMvPolynomial.eval₂ (RingHom.id _) (fun _ => (1 : ZMod 19)) p
+      let v0 := CPoly.CMvPolynomial.eval₂ (RingHom.id _) (fun _ => (0 : ZMod 2147483647)) p
+      let v1 := CPoly.CMvPolynomial.eval₂ (RingHom.id _) (fun _ => (1 : ZMod 2147483647)) p
       IO.println s!"round_poly_{i.val}: [{v0.val}, {v1.val}]"
     IO.println "=== END ==="
