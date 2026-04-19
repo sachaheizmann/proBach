@@ -1,12 +1,12 @@
 import Lake
 open Lake DSL
 
-package "sumcheck" where
+package "differential_testing" where
   version := v!"0.1.0"
 
 require sumcheck from git "https://github.com/z-tech/sumcheck-lean4" @ "main"
 
-lean_exe sumcheck where
+lean_exe sumcheck_z19 where
   root := `Main
 
 lean_exe sumcheck_m31 where

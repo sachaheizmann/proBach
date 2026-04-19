@@ -1,17 +1,15 @@
 import Sumcheck.Src.Transcript
+import Sumcheck.Src.Hypercube
 import CompPoly.Multivariate.CMvPolynomial
 import Mathlib.Data.ZMod.Basic
+import Mathlib.FieldTheory.Finite.Basic
 import Std
 
 instance : Fact (Nat.Prime 19) := ⟨by decide⟩
-
-
 set_option maxHeartbeats 10000000
-
 open Std
 
 def boolDomain : List (ZMod 19) := [0,1]
-
 
 def parseNatList (s : String) : List Nat :=
   s.splitOn " " |>.filterMap String.toNat?
@@ -19,7 +17,6 @@ def parseNatList (s : String) : List Nat :=
 def main : IO Unit := do
   let stdin ← IO.getStdin
   let content ← stdin.readToEnd
-  -- split into test cases by "---" delimiter
   let testCases := content.splitOn "---"
     |>.map String.trim
     |>.filter (· ≠ "")
@@ -28,11 +25,8 @@ def main : IO Unit := do
     idx := idx + 1
     IO.println s!"=== TEST {idx} ==="
     let lines := (tc.splitOn "\n" |>.filter (· ≠ "")).toArray
-    -- parse n
     let n := (lines[0]!).toNat!
-    -- parse number of terms
     let numTerms := (lines[1]!).toNat!
-    -- parse polynomial
     let termLines := (lines.toList.drop 2 |>.take numTerms)
     let mut poly : CPoly.Unlawful n (ZMod 19) := 0
     for line in termLines do
@@ -49,17 +43,18 @@ def main : IO Unit := do
     let challengeVals := parseNatList challengeLine
     let challenges : Fin n → ZMod 19 :=
       fun i => (challengeVals[i.val]! : ZMod 19)
+    let initialClaim := honestClaim boolDomain examplePoly
     let transcript :=
-      generate_honest_transcript
+      generateHonestTranscript
         (𝔽 := ZMod 19)
         boolDomain
         examplePoly
-        (honest_claim boolDomain examplePoly)
+        initialClaim
         challenges
     IO.println "=== SUMCHECK TRANSCRIPT ==="
     IO.print "claims: ["
     for i in List.finRange (n + 1) do
-      let val := (transcript.claims i).val
+      let val := (transcript.claims initialClaim i).val
       if i.val > 0 then IO.print ", "
       IO.print s!"{val}"
     IO.println "]"
@@ -70,8 +65,8 @@ def main : IO Unit := do
       IO.print s!"{val}"
     IO.println "]"
     for i in List.finRange n do
-      let p := transcript.round_polys i
-      let v0 := CPoly.CMvPolynomial.eval₂ (RingHom.id _) (fun _ => (0 : ZMod 19)) p
-      let v1 := CPoly.CMvPolynomial.eval₂ (RingHom.id _) (fun _ => (1 : ZMod 19)) p
+      let p := transcript.roundPolys i
+      let v0 := CPoly.CMvPolynomial.eval (fun _ => (0 : ZMod 19)) p
+      let v1 := CPoly.CMvPolynomial.eval (fun _ => (1 : ZMod 19)) p
       IO.println s!"round_poly_{i.val}: [{v0.val}, {v1.val}]"
     IO.println "=== END ==="
