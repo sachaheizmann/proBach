@@ -155,46 +155,65 @@ macro_rules! run_sumcheck {
 // ---------- MAIN ----------
 
 fn main() {
-    // read all stdin
-    let mut input = String::new();
-    io::stdin().read_to_string(&mut input).unwrap();
-    let lines: Vec<&str> = input
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .collect();
-
-    // line 0: field selector
-    // 0=Z19, 1=M31, 2=BabyBear, 3=KoalaBear, 4=Goldilocks
-    let field_id: u8 = lines[0].trim().parse().unwrap();
-
-    // line 1: n (number of variables)
-    let n: usize = lines[1].trim().parse().unwrap();
-
-    // line 2: number of terms
-    let num_terms: usize = lines[2].trim().parse().unwrap();
-
-    // lines 3..3+num_terms: "coeff exp0 exp1 ... exp_{n-1}"
-    let mut terms: Vec<(u64, Vec<u64>)> = Vec::new();
-    for i in 0..num_terms {
-        let nums = parse_u64_list(lines[3 + i]);
-        let coeff = nums[0];
-        let exponents = nums[1..].to_vec();
-        terms.push((coeff, exponents));
-    }
-
-    // line 3+num_terms: seed
-    let seed: u64 = lines[3 + num_terms].trim().parse().unwrap();
-
-    // dispatch to correct field
-    match field_id {
-        0 => run_sumcheck!(F19,        &terms, n, seed),
-        1 => run_sumcheck!(M31,        &terms, n, seed),
-        2 => run_sumcheck!(BabyBear,   &terms, n, seed),
-        3 => run_sumcheck!(KoalaBear,  &terms, n, seed),
-        4 => run_sumcheck!(Goldilocks, &terms, n, seed),
-        _ => {
-            eprintln!("Unknown field_id: {}", field_id);
-            std::process::exit(1);
+    use std::io::BufRead;
+    let stdin = io::stdin();
+    let mut lines_iter = stdin.lock().lines();
+    
+    loop {
+        // collect lines until "---" or EOF
+        let mut block: Vec<String> = Vec::new();
+        let mut got_input = false;
+        
+        loop {
+            match lines_iter.next() {
+                None => {
+                    // EOF — exit cleanly
+                    return;
+                }
+                Some(Ok(line)) => {
+                    if line.trim() == "---" {
+                        break; // end of this test case
+                    }
+                    if !line.trim().is_empty() {
+                        block.push(line);
+                        got_input = true;
+                    }
+                }
+                Some(Err(_)) => return,
+            }
         }
+        
+        if !got_input { continue; }
+        
+        // parse exactly like before
+        let field_id: u8 = block[0].trim().parse().unwrap();
+        let n: usize     = block[1].trim().parse().unwrap();
+        let num_terms: usize = block[2].trim().parse().unwrap();
+        
+        let mut terms: Vec<(u64, Vec<u64>)> = Vec::new();
+        for i in 0..num_terms {
+            let nums = parse_u64_list(&block[3 + i]);
+            let coeff = nums[0];
+            let exponents = nums[1..].to_vec();
+            terms.push((coeff, exponents));
+        }
+        let seed: u64 = block[3 + num_terms].trim().parse().unwrap();
+        
+        // run sumcheck — same as before
+        match field_id {
+            0 => run_sumcheck!(F19,        &terms, n, seed),
+            1 => run_sumcheck!(M31,        &terms, n, seed),
+            2 => run_sumcheck!(BabyBear,   &terms, n, seed),
+            3 => run_sumcheck!(KoalaBear,  &terms, n, seed),
+            4 => run_sumcheck!(Goldilocks, &terms, n, seed),
+            _ => eprintln!("Unknown field_id: {}", field_id),
+        }
+        
+        // signal to harness that output is complete
+        println!("---");
+        
+        // flush immediately so harness doesn't wait forever
+        use std::io::Write;
+        io::stdout().flush().unwrap();
     }
 }

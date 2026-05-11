@@ -4,6 +4,24 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+afl = "0.18.1"
 ark-ff = "0.5"
 ark-std = "0.5"
 efficient-sumcheck = { git = "https://github.com/compsec-epfl/efficient-sumcheck" }
+
+[lib]
+name = "epfl_sumcheck"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "epfl_sumcheck"
+path = "src/main.rs"
+
+[[bin]]
+name = "fuzz_target"
+path = "src/fuzz_target.rs"
+
+[[bin]]
+name = "cov_target"
+path = "src/cov_target.rs"
