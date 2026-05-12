@@ -15,11 +15,12 @@ static const uint64_t MODULI[5] = {
     18446744069414584321ULL,
 };
 
-#define MAX_N     24
-#define MAX_TERMS 8
-#define MAX_OUT   65536
-#define MAX_BUF   4096
+#define MAX_N     24 // maximum number of variables
+#define MAX_TERMS 8  // maximum number of monomials in a polynomial
 
+#define MAX_BUF   4096 // length of single test case
+
+// Macros for manual testing/compiling
 #ifndef __AFL_INIT
 #define __AFL_INIT() do {} while(0)
 #endif
@@ -28,7 +29,7 @@ static const uint64_t MODULI[5] = {
 #define __AFL_LOOP(x) (1)
 #endif
 
-// ─── Lean runtime ────────────────────────────────────────────────────────────
+// ─── Init Lean runtime + functions ────────────────────────────────────────────────────────────
 
 void lean_initialize_runtime_module();
 void lean_io_mark_end_initialization();
@@ -54,6 +55,8 @@ uint32_t rust_run_sumcheck(
 
 // ─── Lean helpers ────────────────────────────────────────────────────────────
 
+
+// builds a Lean List Nat from a C array of uint64_t values, used to pass challenges to Lean
 static lean_object* make_nat_list(uint64_t* vals, int len) {
     lean_object* list = lean_box(0);
     for (int i = len - 1; i >= 0; i--) {
@@ -65,6 +68,7 @@ static lean_object* make_nat_list(uint64_t* vals, int len) {
     return list;
 }
 
+// builds a single Lean term, (Nat x List Nat) pair representing one monomial
 static lean_object* make_term(uint64_t coeff, uint8_t* exps, int n) {
     lean_object* exp_list = lean_box(0);
     for (int i = n - 1; i >= 0; i--) {
@@ -79,6 +83,7 @@ static lean_object* make_term(uint64_t coeff, uint8_t* exps, int n) {
     return pair;
 }
 
+// builds a Lean List (Nat × List Nat), full list of all monomials
 static lean_object* make_terms_list(uint64_t* coeffs, uint8_t exps[][MAX_N], int num_terms, int n) {
     lean_object* list = lean_box(0);
     for (int i = num_terms - 1; i >= 0; i--) {
@@ -94,7 +99,7 @@ static lean_object* make_terms_list(uint64_t* coeffs, uint8_t exps[][MAX_N], int
 // ─── Test case ───────────────────────────────────────────────────────────────
 
 typedef struct {
-    uint8_t  field_id;
+    uint8_t  field_id; 
     uint8_t  n;
     uint8_t  num_terms;
     uint64_t coeffs[MAX_TERMS];
@@ -104,6 +109,7 @@ typedef struct {
 
 // ─── Dedup ───────────────────────────────────────────────────────────────────
 
+// sums monomials with identical exponents 
 static int dedup_terms(uint64_t *coeffs, uint8_t exps[][MAX_N], int num_terms, int n, uint64_t modulus) {
     int new_count = 0;
     for (int i = 0; i < num_terms; i++) {
@@ -166,8 +172,8 @@ static int parse_bytes(const uint8_t *buf, size_t len, TestCase *tc) {
 
 // ─── Lean call ───────────────────────────────────────────────────────────────
 
+// array of function pointers depending on field_id
 typedef lean_object* (*lean_transcript_fn)(lean_object*, lean_object*, lean_object*);
-
 static lean_transcript_fn LEAN_FNS[5] = {
     lean_compute_transcript_z19,
     lean_compute_transcript_m31,
@@ -177,62 +183,71 @@ static lean_transcript_fn LEAN_FNS[5] = {
 };
 
 static int run_lean(const TestCase* tc, const uint64_t* rust_out,
-                    uint64_t* lean_claims, uint64_t* lean_rounds) {
+                    uint64_t* lean_s0, uint64_t* lean_final) {
     int n = tc->n;
 
-    // challenges are at offset n+1+2n = 3n+1 in rust_out
-    uint64_t chals[MAX_N];
+    // extract challenges from rust output ,they are at offset n -> 2n 
+    // in rust_out
+    uint64_t challenges[MAX_N];
     for (int i = 0; i < n; i++)
-        chals[i] = rust_out[n + 1 + 2*n + i];
+        challenges[i] = rust_out[n + i];
 
     lean_object* ln     = lean_unsigned_to_nat(n);
     lean_object* lterms = make_terms_list((uint64_t*)tc->coeffs,
                                           (uint8_t(*)[MAX_N])tc->exps,
                                           tc->num_terms, n);
-    lean_object* lchals = make_nat_list(chals, n);
+    lean_object* lchallenges = make_nat_list(challenges, n);
 
-    lean_object* result = LEAN_FNS[tc->field_id](ln, lterms, lchals);
+    // call filed_id corresponding function
+    // returns a Lean pair (List UInt64, List (UInt64 × UInt64))
+    lean_object* result = LEAN_FNS[tc->field_id](ln, lterms, lchallenges);
 
-    lean_object* claims_list = lean_ctor_get(result, 0);
+    // extract round polys list
     lean_object* rounds_list = lean_ctor_get(result, 1);
-    lean_inc(claims_list);
     lean_inc(rounds_list);
 
-    lean_object* cur = claims_list;
-    int idx = 0;
-    while (lean_obj_tag(cur) != 0) {
-        lean_object* head = lean_ctor_get(cur, 0);
-        lean_claims[idx++] = lean_unbox_uint64(head);
-        cur = lean_ctor_get(cur, 1);
-    }
-
+    // extract s0 from each round polynomial pair
     cur = rounds_list;
     idx = 0;
     while (lean_obj_tag(cur) != 0) {
         lean_object* pair = lean_ctor_get(cur, 0);
         // UInt64 x UInt64 pair: 2 pointer fields (boxed UInt64)
         lean_rounds[idx++] = lean_unbox_uint64(lean_ctor_get(pair, 0));
-        lean_rounds[idx++] = lean_unbox_uint64(lean_ctor_get(pair, 1));
         cur = lean_ctor_get(cur, 1);
     }
 
+    // extract final value = last claim (first element of pair, last item)
+    lean_object* claims_list = lean_ctor_get(result, 0);
+    lean_inc(claims_list);
+    cur = claims_list;
+    lean_object* last = NULL;
+    while (lean_obj_tag(cur) != 0) {
+        last = lean_ctor_get(cur, 0);
+        cur = lean_ctor_get(cur, 1);
+    }
+
+    *lean_final = lean_unbox_uint64(last);
+
     lean_dec_ref(result);
-    lean_dec_ref(claims_list);
     lean_dec_ref(rounds_list);
+    lean_dec_ref(claims_list);
     return 0;
 }
 
 // ─── Compare ─────────────────────────────────────────────────────────────────
 
 static int compare_outputs(const uint64_t* rust_out, uint32_t rust_len,
-                            const uint64_t* lean_claims,
-                            const uint64_t* lean_rounds, int n) {
-    for (int i = 0; i <= n; i++) {
-        if (rust_out[i] != lean_claims[i]) return 0;
+                            const uint64_t* lean_s0,
+                            const uint64_t* lean_final, int n) {
+    // compare s0 per round
+    for (int i = 0; i < n; i++) {
+        if (rust_out[i] != lean_s0[i]) return 0;
     }
-    for (int i = 0; i < 2*n; i++) {
-        if (rust_out[n+1+i] != lean_rounds[i]) return 0;
-    }
+
+    // compare final value
+    // rust_out[2n] = final value
+    if (rust_out[2*n] != lean_final) return 0;
+
     return 1;
 }
 
@@ -251,6 +266,7 @@ int main(void) {
 
     // AFL++ persistent loop
     while (__AFL_LOOP(100000)) {
+        // read input
         uint8_t buf[MAX_BUF];
         size_t len = fread(buf, 1, sizeof(buf), stdin);
         if (len == 0) break;
@@ -258,27 +274,26 @@ int main(void) {
         TestCase tc;
         if (parse_bytes(buf, len, &tc) != 0) continue;
 
-        // flat exps array for Rust FFI
+        // flatten exps array for Rust FFI
         uint8_t flat_exps[MAX_TERMS * MAX_N];
         for (int t = 0; t < tc.num_terms; t++)
             for (int v = 0; v < tc.n; v++)
                 flat_exps[t * tc.n + v] = tc.exps[t][v];
 
         // run Rust via direct FFI call
-        uint64_t rust_out[4 * MAX_N + 1] = {0};
+        uint64_t rust_out[2 * MAX_N + 1] = {0};
         uint32_t rust_len = rust_run_sumcheck(
             tc.field_id, tc.n, tc.num_terms,
             tc.coeffs, flat_exps, tc.seed,
             rust_out
         );
-        if (rust_len == 0) continue;
+        if (rust_len == 0) abort();
 
         // run Lean via FFI
         uint64_t lean_claims[MAX_N + 1] = {0};
         uint64_t lean_rounds[2 * MAX_N] = {0};
-        if (run_lean(&tc, rust_out, lean_claims, lean_rounds) != 0) continue;
 
-        // compare
+        // compare, if different print
         if (!compare_outputs(rust_out, rust_len, lean_claims, lean_rounds, tc.n)) {
             FILE* f = fopen("/tmp/afl_mismatch.txt", "w");
             if (f) {
