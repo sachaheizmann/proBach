@@ -1,10 +1,13 @@
+// supports old API only
+
 use std::io::Read;
 use ark_ff::fields::{Fp64, MontBackend, MontConfig};
 use ark_ff::{Zero, BigInteger, PrimeField};
 use ark_std::rand::SeedableRng;
 use ark_std::rand::rngs::StdRng;
-use efficient_sumcheck::multilinear_sumcheck;
-use efficient_sumcheck::transcript::SanityTranscript;
+use effsc::runner::sumcheck;
+use effsc::provers::multilinear::MultilinearProver;
+use effsc::transcript::SanityTranscript;
 
 #[derive(MontConfig)]
 #[modulus = "19"]

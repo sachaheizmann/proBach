@@ -1,3 +1,4 @@
+// supports old API only
 #[macro_use]
 extern crate afl;
 
@@ -6,8 +7,9 @@ use ark_ff::fields::{Fp64, MontBackend, MontConfig};
 use ark_ff::{Zero, BigInteger, PrimeField};
 use ark_std::rand::SeedableRng;
 use ark_std::rand::rngs::StdRng;
-use efficient_sumcheck::multilinear_sumcheck;
-use efficient_sumcheck::transcript::SanityTranscript;
+use effsc::runner::sumcheck;
+use effsc::provers::multilinear::MultilinearProver;
+use effsc::transcript::SanityTranscript;
 
 // ─── PRIME FIELDS ─────────────────────────────────────────────────────────────
 
