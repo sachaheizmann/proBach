@@ -2,8 +2,9 @@ use ark_ff::fields::{Fp64, MontBackend, MontConfig};
 use ark_ff::{Zero, BigInteger, PrimeField};
 use ark_std::rand::SeedableRng;
 use ark_std::rand::rngs::StdRng;
-use efficient_sumcheck::multilinear_sumcheck;
-use efficient_sumcheck::transcript::SanityTranscript;
+use effsc::provers::multilinear::MultilinearProver;
+use effsc::runner::sumcheck;
+use effsc::transcript::SanityTranscript;
 use std::panic;
 
 // ─── FIELD DEFINITIONS ────────────────────────────────────────────────────────
@@ -49,7 +50,7 @@ const MODULI: [u64; 5] = [
 ];
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-
+// generate all 2^n boolean points
 fn all_boolean_points(n: usize) -> Vec<Vec<u64>> {
     let total = 1usize << n;
     (0..total)
@@ -57,13 +58,14 @@ fn all_boolean_points(n: usize) -> Vec<Vec<u64>> {
         .collect()
 }
 
-// ─── CORE SUMCHECK ────────────────────────────────────────────────────────────
-// returns: claims (n+1) then round_polys (n*2) flat into out_buf
-// return value: number of u64s written, or 0 on panic
+// ─── CORE SUMCHECK MACRO ──────────────────────────────────────────────────────
 
 macro_rules! run_sumcheck_ffi {
     ($F:ty, $terms:expr, $n:expr, $seed:expr, $out:expr) => {{
+
+        // Montgomery form to u64
         let to_u64 = |x: $F| -> u64 { x.into_bigint().as_ref()[0] };
+
         let points = all_boolean_points($n);
 
         let evaluations: Vec<$F> = points.iter().map(|p| {
@@ -78,36 +80,43 @@ macro_rules! run_sumcheck_ffi {
             r
         }).collect();
 
+        // compute inital claim by suming the evaluation table
         let claim_first: $F = evaluations.iter().copied().sum();
 
         let result = panic::catch_unwind(move || {
-            let mut evals = evaluations.clone();
+            let mut prover = MultilinearProver::new(evaluations.clone());
+            let num_rounds = prover.num_variables();
             let mut rng = StdRng::seed_from_u64($seed);
             let mut transcript = SanityTranscript::new(&mut rng);
-            multilinear_sumcheck::<$F, $F>(&mut evals, &mut transcript)
+            // API call
+            sumcheck(&mut prover, num_rounds, &mut transcript, |_, _| {})
         });
 
         match result {
             Err(_) => 0u32,
-            Ok(transcript) => {
+            Ok(proof) => {
                 let mut idx = 0usize;
-                // claims[0] = initial sum
-                $out[idx] = to_u64(claim_first); idx += 1;
-                // claims[1..n+1] = round claims
-                for (i, (p0, p1)) in transcript.prover_messages.iter().enumerate() {
-                    let r = transcript.verifier_messages[i];
-                    let next: $F = *p0 + (*p1 - *p0) * r;
-                    $out[idx] = to_u64(next); idx += 1;
+        
+                // round polys: (s0, s1) per round
+                // s1 derived from consistency check: s1 = claim - s0
+                let mut claim = claim_first;
+                for i in 0..proof.round_polys.len() {
+                    let s0 = proof.round_polys[i][0];
+                    let s1 = claim - s0;
+                    $out[idx] = to_u64(s0); idx += 1;
+                    let s1 = claim - s0;
+                    let r = proof.challenges[i];
+                    claim = s0 + (s1 - s0) * r;
                 }
-                // round polys: p0, p1 per round
-                for (p0, p1) in &transcript.prover_messages {
-                    $out[idx] = to_u64(*p0); idx += 1;
-                    $out[idx] = to_u64(*p1); idx += 1;
-                }
+        
                 // challenges
-                for r in &transcript.verifier_messages {
+                for r in &proof.challenges {
                     $out[idx] = to_u64(*r); idx += 1;
                 }
+        
+                // final value
+                $out[idx] = to_u64(proof.final_value); idx += 1;
+        
                 idx as u32
             }
         }
@@ -115,22 +124,6 @@ macro_rules! run_sumcheck_ffi {
 }
 
 // ─── C-CALLABLE EXPORT ────────────────────────────────────────────────────────
-//
-// Input:
-//   field_id   : 0=Z19, 1=M31, 2=BabyBear, 3=KoalaBear, 4=Goldilocks
-//   n          : number of variables
-//   num_terms  : number of polynomial terms
-//   coeffs     : array of num_terms coefficients
-//   exps       : flat array of num_terms*n exponents
-//   seed       : RNG seed
-//   out_buf    : output buffer (caller allocates, size >= (3*n+1) u64s)
-//
-// Output layout in out_buf:
-//   [0..n]       : claims (n+1 values)
-//   [n+1..3n]    : round polys (p0,p1 per round = 2n values)
-//   [3n+1..4n]   : challenges (n values)
-//
-// Returns: number of u64s written, or 0 on panic
 
 #[no_mangle]
 pub extern "C" fn rust_run_sumcheck(
@@ -146,7 +139,6 @@ pub extern "C" fn rust_run_sumcheck(
     let num_terms = num_terms as usize;
     let modulus = MODULI[field_id as usize % 5];
 
-    // safety: caller guarantees valid pointers
     let coeffs_slice = unsafe { std::slice::from_raw_parts(coeffs, num_terms) };
     let exps_slice   = unsafe { std::slice::from_raw_parts(exps, num_terms * n) };
     let out_slice    = unsafe { std::slice::from_raw_parts_mut(out_buf, 4 * n + 1) };
