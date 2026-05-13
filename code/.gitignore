@@ -1,0 +1,28 @@
+# Build artifacts
+candidate/epfl_sumcheck/target/
+lean/.lake/
+
+# Fuzzing output
+fuzzer/afl_harness/afl_output/
+fuzzer/afl_harness/harness_afl
+fuzzer/afl_harness/harness
+
+# Coverage
+candidate/epfl_sumcheck/coverage.profdata
+candidate/epfl_sumcheck/coverage-*.profraw
+candidate/epfl_sumcheck/afl_seeds/
+candidate/epfl_sumcheck/afl_output/
+
+# Misc
+backup/
+doc/
+lean/afl_output/
+
+# macOS
+.DS_Store
+
+# Lake (Lean build system)
+.lake/
+/build/
+/lake-packages/
+/lakefile.olean

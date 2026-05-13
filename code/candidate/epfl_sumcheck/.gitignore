@@ -1,5 +1,0 @@
-target/
-afl_seeds/
-afl_output/
-coverage.profdata
-coverage-*.profraw
