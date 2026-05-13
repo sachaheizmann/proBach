@@ -26,3 +26,6 @@ lean/afl_output/
 /build/
 /lake-packages/
 /lakefile.olean
+
+#doc 
+../doc/ffi_differential_fuzzing_step_sum.pdf
