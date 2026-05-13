@@ -33,11 +33,11 @@ Each field has a dedicated Lean oracle (`computeTranscriptZ19`, `computeTranscri
 **Protocol coverage:**
 - Only `MultilinearProver` is tested, `InnerProductProver`, `CoefficientProver`, `SpaceProver` and `BlendyProver` are not covered
 - Only the honest prover is tested, no malicious prover scenarios
-- Fiat-Shamir is not tested — challenges come from a seeded RNG (`SanityTranscript`), not a hash-based transcript
+- Fiat-Shamir is not tested yet,  challenges come from a seeded RNG (`SanityTranscript`)
 
 **Lean oracle:**
-- Only ZMod 19 has a formal proof of primality (`by decide`) — the other 4 fields use `axiom` to assert primality without proof
-- The Lean oracle is only tested against ZMod 19, M31, BabyBear, KoalaBear, and Goldilocks — extension fields are not covered
+- Only ZMod 19 has a formal proof of primality (`by decide`), the other 4 fields use `axiom` to assert primality without proof
+- The Lean oracle is only tested against ZMod 19, M31, BabyBear, KoalaBear, and Goldilock
 
 ## Architecture
 
