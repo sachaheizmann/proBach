@@ -148,24 +148,41 @@ static int dedup_terms(uint64_t *coeffs, uint8_t exps[][MAX_N], int num_terms, i
 // ─── Parse binary input ──────────────────────────────────────────────────────
 
 static int parse_bytes(const uint8_t *buf, size_t len, TestCase *tc) {
-    if (len < 11) return -1;
+    if (len < 20) return -1; // skip to shrt formats directly
     size_t pos = 0;
+
     tc->field_id  = buf[pos++] % 5;
     tc->n         = (buf[pos++] % MAX_N) + 1;
     tc->num_terms = (buf[pos++] % MAX_TERMS) + 1;
+
     uint64_t modulus = MODULI[tc->field_id];
+
     for (int t = 0; t < tc->num_terms; t++) {
         if (pos >= len) {
             tc->num_terms = t == 0 ? 1 : t;
             if (t == 0) { tc->coeffs[0] = 1; memset(tc->exps[0], 0, MAX_N); }
             break;
         }
-        tc->coeffs[t] = buf[pos++] % modulus;
-        for (int v = 0; v < tc->n; v++)
-            tc->exps[t][v] = (pos < len) ? (buf[pos++] & 1) : 0;
+
+        // read 8 bytes for coefficient
+        uint64_t coeff = 0;
+        for (int b = 0; b < 8; b++) {
+            coeff |= ((uint64_t)(pos < len ? buf[pos++] : 0)) << (8 * b);
+        }
+        tc->coeffs[t] = coeff % modulus;
+
+        for (int v = 0; v < tc->n; v++) {
+            int byte_idx = v / 8;
+            int bit_idx  = v % 8;
+            uint8_t byte = (pos + byte_idx < len) ? buf[pos + byte_idx] : 0;
+            tc->exps[t][v] = (byte >> bit_idx) & 1;
+        }
+        pos += exp_bytes;
     }
+
     if (len >= 8) memcpy(&tc->seed, buf + len - 8, 8);
     else tc->seed = 42;
+    
     tc->num_terms = dedup_terms(tc->coeffs, tc->exps, tc->num_terms, tc->n, modulus);
     return 0;
 }
