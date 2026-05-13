@@ -18,7 +18,7 @@ static const uint64_t MODULI[5] = {
 #define MAX_N     24 // maximum number of variables
 #define MAX_TERMS 8  // maximum number of monomials in a polynomial
 
-#define MAX_BUF   4096 // length of single test case
+#define MAX_BUF   256 // length of single test case
 
 // Macros for manual testing/compiling
 #ifndef __AFL_INIT
@@ -171,6 +171,7 @@ static int parse_bytes(const uint8_t *buf, size_t len, TestCase *tc) {
         }
         tc->coeffs[t] = coeff % modulus;
 
+        int exp_bytes = (tc->n + 7) / 8;
         for (int v = 0; v < tc->n; v++) {
             int byte_idx = v / 8;
             int bit_idx  = v % 8;
@@ -217,45 +218,37 @@ static int run_lean(const TestCase* tc, const uint64_t* rust_out,
 
     // call filed_id corresponding function
     // returns a Lean pair (List UInt64, List (UInt64 × UInt64))
+
     lean_object* result = LEAN_FNS[tc->field_id](ln, lterms, lchallenges);
 
-    // extract round polys list
-    lean_object* rounds_list = lean_ctor_get(result, 1);
-    lean_inc(rounds_list);
+    // extract s0 list (first element of pair)
+    lean_object* s0_list = lean_ctor_get(result, 0);
+    lean_inc(s0_list);
 
-    // extract s0 from each round polynomial pair
-    cur = rounds_list;
-    idx = 0;
+    // walk s0 list
+    lean_object* cur = s0_list;
+    int idx = 0;
     while (lean_obj_tag(cur) != 0) {
-        lean_object* pair = lean_ctor_get(cur, 0);
-        // UInt64 x UInt64 pair: 2 pointer fields (boxed UInt64)
-        lean_rounds[idx++] = lean_unbox_uint64(lean_ctor_get(pair, 0));
+        lean_object* head = lean_ctor_get(cur, 0);
+        lean_s0[idx++] = lean_unbox_uint64(head);
         cur = lean_ctor_get(cur, 1);
     }
 
-    // extract final value = last claim (first element of pair, last item)
-    lean_object* claims_list = lean_ctor_get(result, 0);
-    lean_inc(claims_list);
-    cur = claims_list;
-    lean_object* last = NULL;
-    while (lean_obj_tag(cur) != 0) {
-        last = lean_ctor_get(cur, 0);
-        cur = lean_ctor_get(cur, 1);
-    }
-
-    *lean_final = lean_unbox_uint64(last);
+    // extract final value (second element of pair) - it's a boxed UInt64
+    lean_object* final_obj = lean_ctor_get(result, 1);
+    *lean_final = lean_unbox_uint64(final_obj);
 
     lean_dec_ref(result);
-    lean_dec_ref(rounds_list);
-    lean_dec_ref(claims_list);
+    lean_dec_ref(s0_list);
     return 0;
+
 }
 
 // ─── Compare ─────────────────────────────────────────────────────────────────
 
 static int compare_outputs(const uint64_t* rust_out, uint32_t rust_len,
                             const uint64_t* lean_s0,
-                            const uint64_t* lean_final, int n) {
+                            const uint64_t lean_final, int n) {
     // compare s0 per round
     for (int i = 0; i < n; i++) {
         if (rust_out[i] != lean_s0[i]) return 0;
@@ -274,8 +267,14 @@ int main(void) {
     // initialize Lean runtime once
     lean_initialize_runtime_module();
     lean_object* res = initialize_differential__testing_SumcheckFFI(1);
-    if (lean_io_result_is_ok(res)) { lean_dec_ref(res); }
-    else { lean_io_result_show_error(res); lean_dec(res); return 1; }
+    if (lean_io_result_is_ok(res)) { 
+        lean_dec_ref(res);
+    }
+    else { 
+        lean_io_result_show_error(res);
+        lean_dec(res);
+        return 1; 
+    }
     lean_io_mark_end_initialization();
 
     // defer AFL++ fork until after Lean init
@@ -307,19 +306,21 @@ int main(void) {
         if (rust_len == 0) abort();
 
         // run Lean via FFI
-        uint64_t lean_claims[MAX_N + 1] = {0};
-        uint64_t lean_rounds[2 * MAX_N] = {0};
+        uint64_t lean_s0[MAX_N] = {0};
+        uint64_t lean_final = 0;
+        run_lean(&tc, rust_out, lean_s0, &lean_final);
 
-        // compare, if different print
-        if (!compare_outputs(rust_out, rust_len, lean_claims, lean_rounds, tc.n)) {
+        // compare
+        if (!compare_outputs(rust_out, rust_len, lean_s0, lean_final, tc.n)) {
             FILE* f = fopen("/tmp/afl_mismatch.txt", "w");
             if (f) {
                 fprintf(f, "FIELD: %d N: %d\n", tc.field_id, tc.n);
-                fprintf(f, "RUST claims: ");
-                for (int i = 0; i <= tc.n; i++) fprintf(f, "%lu ", rust_out[i]);
-                fprintf(f, "\nLEAN claims: ");
-                for (int i = 0; i <= tc.n; i++) fprintf(f, "%lu ", lean_claims[i]);
-                fprintf(f, "\n");
+                fprintf(f, "RUST s0: ");
+                for (int i = 0; i < tc.n; i++) fprintf(f, "%lu ", rust_out[i]);
+                fprintf(f, "\nLEAN s0: ");
+                for (int i = 0; i < tc.n; i++) fprintf(f, "%lu ", lean_s0[i]);
+                fprintf(f, "\nRUST final: %lu\n", rust_out[2*tc.n]);
+                fprintf(f, "LEAN final: %lu\n", lean_final);
                 fclose(f);
             }
             abort();
