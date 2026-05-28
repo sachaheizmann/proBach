@@ -1,11 +1,13 @@
 use ark_ff::fields::{Fp64, MontBackend, MontConfig};
-use ark_ff::{Zero, BigInteger, PrimeField};
+use ark_ff::{Zero, PrimeField};
 use ark_std::rand::SeedableRng;
 use ark_std::rand::rngs::StdRng;
 use effsc::provers::multilinear::MultilinearProver;
 use effsc::runner::sumcheck;
 use effsc::transcript::SanityTranscript;
 use std::panic;
+use std::time::Instant; // timer
+
 
 // ─── FIELD DEFINITIONS ────────────────────────────────────────────────────────
 
@@ -50,11 +52,11 @@ const MODULI: [u64; 5] = [
 ];
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-// generate all 2^n boolean points
+// generate all 2^n boolean points MSB
 fn all_boolean_points(n: usize) -> Vec<Vec<u64>> {
     let total = 1usize << n;
     (0..total)
-        .map(|i| (0..n).map(|bit| ((i >> bit) & 1) as u64).collect())
+        .map(|i| (0..n).map(|bit| ((i >> (n - 1 - bit)) & 1) as u64).collect())
         .collect()
 }
 
@@ -66,8 +68,10 @@ macro_rules! run_sumcheck_ffi {
         // Montgomery form to u64
         let to_u64 = |x: $F| -> u64 { x.into_bigint().as_ref()[0] };
 
+        let t0 = Instant::now(); // timer t0
         let points = all_boolean_points($n);
-
+        let t1 = Instant::now(); // timer t1
+        eprintln!("Step 1 (boolean points): {:.6}s", t1.duration_since(t0).as_secs_f64());
         let evaluations: Vec<$F> = points.iter().map(|p| {
             let mut r = <$F>::zero();
             for (coeff, exps) in &$terms {
@@ -79,18 +83,25 @@ macro_rules! run_sumcheck_ffi {
             }
             r
         }).collect();
-
+        let t2 = Instant::now(); //timer t2
+        eprintln!("Step 2 (eval table):     {:.6}s", t2.duration_since(t1).
+        as_secs_f64());
+        
         // compute inital claim by suming the evaluation table
         let claim_first: $F = evaluations.iter().copied().sum();
 
+        let t3 = Instant::now();
+        eprintln!("Step 3 (initial claim):  {:.6}s", t3.duration_since(t2).as_secs_f64());
         let result = panic::catch_unwind(move || {
             let mut prover = MultilinearProver::new(evaluations.clone());
             let num_rounds = prover.num_variables();
             let mut rng = StdRng::seed_from_u64($seed);
-            let mut transcript = SanityTranscript::new(&mut rng);
-            // API call
+            let mut transcript = SanityTranscript::new(&mut rng); // Sanity for now, add random next
+            // rust API call
             sumcheck(&mut prover, num_rounds, &mut transcript, |_, _| {})
         });
+        let t4 = Instant::now();
+        eprintln!("Step 4 (sumcheck API):   {:.6}s", t4.duration_since(t3).as_secs_f64()); // timer t4
 
         match result {
             Err(_) => 0u32,
@@ -102,7 +113,7 @@ macro_rules! run_sumcheck_ffi {
                 let mut claim = claim_first;
                 for i in 0..proof.round_polys.len() {
                     let s0 = proof.round_polys[i][0];
-                    let s1 = claim - s0;
+                    
                     $out[idx] = to_u64(s0); idx += 1;
                     let s1 = claim - s0;
                     let r = proof.challenges[i];

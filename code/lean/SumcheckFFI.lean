@@ -1,84 +1,84 @@
-import Sumcheck.Src.Transcript
-import Sumcheck.Src.Hypercube
+import SumcheckProtocol.Src.MultilinearProver
 import CompPoly.Multivariate.CMvPolynomial
 import Mathlib.Data.ZMod.Basic
 import Mathlib.FieldTheory.Finite.Basic
 
 -- ─── Setup ───────────────────────────────────────────────────────────────────
-
 instance : Fact (Nat.Prime 19) := ⟨by decide⟩
-
-axiom mersenne31_prime : Nat.Prime 2147483647
-instance : Fact (Nat.Prime 2147483647) := ⟨mersenne31_prime⟩
-
-axiom babybear_prime : Nat.Prime 2013265921
-instance : Fact (Nat.Prime 2013265921) := ⟨babybear_prime⟩
-
-axiom koalabear_prime : Nat.Prime 2130706433
-instance : Fact (Nat.Prime 2130706433) := ⟨koalabear_prime⟩
-
-axiom goldilocks_prime : Nat.Prime 18446744069414584321
+axiom mersenne31_prime  : Nat.Prime 2147483647
+axiom babybear_prime    : Nat.Prime 2013265921
+axiom koalabear_prime   : Nat.Prime 2130706433
+axiom goldilocks_prime  : Nat.Prime 18446744069414584321
+instance : Fact (Nat.Prime 2147483647)           := ⟨mersenne31_prime⟩
+instance : Fact (Nat.Prime 2013265921)           := ⟨babybear_prime⟩
+instance : Fact (Nat.Prime 2130706433)           := ⟨koalabear_prime⟩
 instance : Fact (Nat.Prime 18446744069414584321) := ⟨goldilocks_prime⟩
 
 set_option maxHeartbeats 10000000
 
--- ─── Pure Computation ────────────────────────────────────────────────────────
+open SumcheckProtocol.MultilinearProver
 
+-- ─── Fold helper ─────────────────────────────────────────────────────────────
+-- Folds the eval table n times with the given challenges.
+-- After n folds the single remaining entry is p(r0,...,r_{n-1}).
+private def foldAll (p : Nat) [Fact (Nat.Prime p)]
+    (challenges : List UInt64) :
+    (m : Nat) → EvalTable m (ZMod p) → Nat → ZMod p
+  | 0,     t, _  => t.get ⟨0, by norm_num⟩
+  | m + 1, t, ci =>
+      let r := ((challenges.getD ci 0).toNat : ZMod p)
+      foldAll p challenges m (fold_msb_succ r t) (ci + 1)
+-- ─── Pure Computation ────────────────────────────────────────────────────────
 private def runProtocol (p : Nat) [Fact (Nat.Prime p)] (n : Nat)
-  (terms : List (Nat × List Nat)) (challenges : List Nat)
+    (evalTable : List UInt64) (challenges : List UInt64)
     : List UInt64 × UInt64 :=
 
-  let boolDom : List (ZMod p) := [0, 1]
+  -- Build EvalTable n (ZMod p) from flat list of 2^n field elements
+  let arr := evalTable.toArray
+  let table : EvalTable n (ZMod p) :=
+    Vector.ofFn (fun i : Fin (2^n) =>
+      ((arr.getD i.val 0).toNat : ZMod p))
 
-  let poly : CPoly.Unlawful n (ZMod p) :=
-    terms.foldl (fun acc (c, exps) =>
-      let coeff     := (c : ZMod p)
-      let exponents := (List.range n).map (fun i => exps.getD i 0) |>.toArray
-      let mon       : CPoly.CMvMonomial n := ⟨exponents, by simp [exponents]⟩
-      acc.insert mon coeff
-    ) 0
+  -- Build challenge function Fin n → ZMod p
+  let chal : Fin n → ZMod p :=
+    fun i => ((challenges.getD i.val 0).toNat : ZMod p)
 
-  let lawfulPoly   := CPoly.Lawful.fromUnlawful poly
+  -- Run the eval-form prover: List (s0, s1) one pair per round
+  let rounds : List (ZMod p × ZMod p) :=
+    multilinearProverEvalForm chal table
 
-  let chal         : Fin n → ZMod p := fun i => (challenges[i.val]! : ZMod p)
+  -- Extract s0 per round for output
+  let s0List : List UInt64 :=
+    rounds.map (fun (s0, _) => UInt64.ofNat s0.val)
 
-  let initialClaim := honestClaim boolDom lawfulPoly
-
-  let transcript   :=
-    generateHonestTranscript (𝔽 := ZMod p) boolDom lawfulPoly initialClaim chal
-
-  let s0List := (List.finRange n).map fun i =>
-      let poly := transcript.roundPolys i
-      UInt64.ofNat (CPoly.CMvPolynomial.eval (fun _ => (0 : ZMod p)) poly).val
-
-  let finalValue := UInt64.ofNat (transcript.claims initialClaim ⟨n, Nat.lt_succ_self n⟩).val
+  -- Final value: fold the table n times with all challenges
+  let finalValue : UInt64 :=
+    UInt64.ofNat (foldAll p challenges n table 0).val
 
   (s0List, finalValue)
 
-
 -- ─── FFI Exports ─────────────────────────────────────────────────────────────
-
 @[export lean_compute_transcript_z19]
-def computeTranscriptZ19 (n : Nat) (terms : List (Nat × List Nat)) (challenges : List Nat)
+def computeTranscriptZ19 (n : Nat) (evalTable : List UInt64) (challenges : List UInt64)
     : List UInt64 × UInt64 :=
-  runProtocol 19 n terms challenges
+  runProtocol 19 n evalTable challenges
 
 @[export lean_compute_transcript_m31]
-def computeTranscriptM31 (n : Nat) (terms : List (Nat × List Nat)) (challenges : List Nat)
+def computeTranscriptM31 (n : Nat) (evalTable : List UInt64) (challenges : List UInt64)
     : List UInt64 × UInt64 :=
-  runProtocol 2147483647 n terms challenges
+  runProtocol 2147483647 n evalTable challenges
 
 @[export lean_compute_transcript_babybear]
-def computeTranscriptBB (n : Nat) (terms : List (Nat × List Nat)) (challenges : List Nat)
+def computeTranscriptBB (n : Nat) (evalTable : List UInt64) (challenges : List UInt64)
     : List UInt64 × UInt64 :=
-  runProtocol 2013265921 n terms challenges
+  runProtocol 2013265921 n evalTable challenges
 
 @[export lean_compute_transcript_koalabear]
-def computeTranscriptKB (n : Nat) (terms : List (Nat × List Nat)) (challenges : List Nat)
+def computeTranscriptKB (n : Nat) (evalTable : List UInt64) (challenges : List UInt64)
     : List UInt64 × UInt64 :=
-  runProtocol 2130706433 n terms challenges
+  runProtocol 2130706433 n evalTable challenges
 
 @[export lean_compute_transcript_goldilocks]
-def computeTranscriptGL (n : Nat) (terms : List (Nat × List Nat)) (challenges : List Nat)
+def computeTranscriptGL (n : Nat) (evalTable : List UInt64) (challenges : List UInt64)
     : List UInt64 × UInt64 :=
-  runProtocol 18446744069414584321 n terms challenges
+  runProtocol 18446744069414584321 n evalTable challenges

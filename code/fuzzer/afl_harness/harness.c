@@ -4,6 +4,11 @@
 #include <string.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <sys/resource.h>
+
+struct timespec t0, t1, t2, t3;
+#include <time.h>
+
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -16,9 +21,9 @@ static const uint64_t MODULI[5] = {
 };
 
 #define MAX_N     24 // maximum number of variables
-#define MAX_TERMS 8  // maximum number of monomials in a polynomial
+#define MAX_TERMS 256  // maximum number of monomials in a polynomial
 
-#define MAX_BUF   256 // length of single test case
+#define MAX_BUF   4096  // 2 + 256*(8 + 3) + 8 = 2826 bytes max at n=24
 
 // Macros for manual testing/compiling
 #ifndef __AFL_INIT
@@ -82,14 +87,45 @@ static lean_object* make_term(uint64_t coeff, uint8_t* exps, int n) {
     lean_ctor_set(pair, 1, exp_list);
     return pair;
 }
+static lean_object* make_uint64_list(uint64_t* vals, int len) {
+        lean_object* list = lean_box(0);
+        for (int i = len - 1; i >= 0; i--) {
+            lean_object* cell = lean_alloc_ctor(1, 2, 0);
+            lean_ctor_set(cell, 0, lean_box_uint64(vals[i]));
+            lean_ctor_set(cell, 1, list);
+            list = cell;
+        }
+        return list;
+    }
 
-// builds a Lean List (Nat × List Nat), full list of all monomials
-static lean_object* make_terms_list(uint64_t* coeffs, uint8_t exps[][MAX_N], int num_terms, int n) {
-    lean_object* list = lean_box(0);
-    for (int i = num_terms - 1; i >= 0; i--) {
-        lean_object* term = make_term(coeffs[i], exps[i], n);
+// Build flat eval table: 2^n entries, one per boolean point (MSB order)
+// Mirrors Rust's all_boolean_points + evaluation loop in the macro
+static lean_object* make_eval_table(
+    uint64_t* coeffs, uint8_t exps[][MAX_N],
+    int num_terms, int n, uint64_t modulus)
+{
+    int table_size = 1 << n;  // 2^n
+    lean_object* list = lean_box(0);  // start with empty list, build backwards
+
+    for (int i = table_size - 1; i >= 0; i--) {
+        // boolean point for index i under MSB convention
+        // bit j of the point = bit (n-1-j) of i
+        uint64_t val = 0;
+        for (int t = 0; t < num_terms; t++) {
+            uint64_t term_val = coeffs[t] % modulus;
+            for (int v = 0; v < n; v++) {
+                int bit = (i >> (n - 1 - v)) & 1;  // MSB convention
+                if (exps[t][v] > 0 && bit == 0) {
+                    term_val = 0;
+                    break;
+                }
+            }
+            val = ((__uint128_t)val + term_val) % modulus;
+        }
+
+        // prepend to Lean list
         lean_object* cell = lean_alloc_ctor(1, 2, 0);
-        lean_ctor_set(cell, 0, term);
+        lean_ctor_set(cell, 0, lean_box_uint64(val));
         lean_ctor_set(cell, 1, list);
         list = cell;
     }
@@ -99,7 +135,7 @@ static lean_object* make_terms_list(uint64_t* coeffs, uint8_t exps[][MAX_N], int
 // ─── Test case ───────────────────────────────────────────────────────────────
 
 typedef struct {
-    uint8_t  field_id; 
+    uint8_t  field_id;
     uint8_t  n;
     uint8_t  num_terms;
     uint64_t coeffs[MAX_TERMS];
@@ -148,42 +184,42 @@ static int dedup_terms(uint64_t *coeffs, uint8_t exps[][MAX_N], int num_terms, i
 // ─── Parse binary input ──────────────────────────────────────────────────────
 
 static int parse_bytes(const uint8_t *buf, size_t len, TestCase *tc) {
-    if (len < 20) return -1; // skip to shrt formats directly
+    if (len < 18) return -1;
     size_t pos = 0;
 
-    tc->field_id  = buf[pos++] % 5;
-    tc->n         = (buf[pos++] % MAX_N) + 1;
-    tc->num_terms = (buf[pos++] % MAX_TERMS) + 1;
+    tc->field_id = buf[pos++] % 5;
+    tc->n        = (buf[pos++] % MAX_N) + 1;
 
     uint64_t modulus = MODULI[tc->field_id];
+    int exp_bytes    = (tc->n + 7) / 8;
+    int term_size    = 8 + exp_bytes;
 
-    for (int t = 0; t < tc->num_terms; t++) {
-        if (pos >= len) {
-            tc->num_terms = t == 0 ? 1 : t;
-            if (t == 0) { tc->coeffs[0] = 1; memset(tc->exps[0], 0, MAX_N); }
-            break;
-        }
+    // parse as many complete monomials as fit, up to MAX_TERMS
+    size_t remaining = (len >= 8 + pos) ? len - 8 - pos : 0;
+    int num_terms    = (int)(remaining / term_size);
+    if (num_terms > MAX_TERMS) num_terms = MAX_TERMS;
+    if (num_terms == 0) num_terms = 1;
 
-        // read 8 bytes for coefficient
+    for (int t = 0; t < num_terms; t++) {
         uint64_t coeff = 0;
-        for (int b = 0; b < 8; b++) {
+        for (int b = 0; b < 8; b++)
             coeff |= ((uint64_t)(pos < len ? buf[pos++] : 0)) << (8 * b);
-        }
         tc->coeffs[t] = coeff % modulus;
 
-        int exp_bytes = (tc->n + 7) / 8;
         for (int v = 0; v < tc->n; v++) {
             int byte_idx = v / 8;
             int bit_idx  = v % 8;
-            uint8_t byte = (pos + byte_idx < len) ? buf[pos + byte_idx] : 0;
+            uint8_t byte = (pos + byte_idx < len - 8) ? buf[pos + byte_idx] : 0;
             tc->exps[t][v] = (byte >> bit_idx) & 1;
         }
         pos += exp_bytes;
     }
 
+    tc->num_terms = num_terms;
+
     if (len >= 8) memcpy(&tc->seed, buf + len - 8, 8);
     else tc->seed = 42;
-    
+
     tc->num_terms = dedup_terms(tc->coeffs, tc->exps, tc->num_terms, tc->n, modulus);
     return 0;
 }
@@ -209,17 +245,30 @@ static int run_lean(const TestCase* tc, const uint64_t* rust_out,
     uint64_t challenges[MAX_N];
     for (int i = 0; i < n; i++)
         challenges[i] = rust_out[n + i];
+    // time our wrapper (building Lean objects)
+    clock_gettime(CLOCK_MONOTONIC, &t0);
 
     lean_object* ln     = lean_unsigned_to_nat(n);
-    lean_object* lterms = make_terms_list((uint64_t*)tc->coeffs,
-                                          (uint8_t(*)[MAX_N])tc->exps,
-                                          tc->num_terms, n);
-    lean_object* lchallenges = make_nat_list(challenges, n);
+    // for each term: build (coeff, [exp0, exp1, ...]) pair
+    lean_object* lterms = make_eval_table(
+        (uint64_t*)tc->coeffs,
+        (uint8_t(*)[MAX_N])tc->exps,
+        tc->num_terms, n, MODULI[tc->field_id]);
 
+    
+    // challenges extracted from rust_out[n..2n]                                      
+    lean_object* lchallenges = make_uint64_list(challenges, n);
+     
+    clock_gettime(CLOCK_MONOTONIC, &t1);
     // call filed_id corresponding function
     // returns a Lean pair (List UInt64, List (UInt64 × UInt64))
-
+    clock_gettime(CLOCK_MONOTONIC, &t2);
     lean_object* result = LEAN_FNS[tc->field_id](ln, lterms, lchallenges);
+    clock_gettime(CLOCK_MONOTONIC, &t3);
+    double wrapper_time = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+    double library_time = (t3.tv_sec - t2.tv_sec) + (t3.tv_nsec - t2.tv_nsec) / 1e9;
+    fprintf(stderr, "Lean wrapper:  %.6fs\n", wrapper_time);
+    fprintf(stderr, "Lean library:  %.6fs\n", library_time);
 
     // extract s0 list (first element of pair)
     lean_object* s0_list = lean_ctor_get(result, 0);
@@ -264,6 +313,12 @@ static int compare_outputs(const uint64_t* rust_out, uint32_t rust_len,
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 int main(void) {
+    // increase stack size to unlimited to prevent stack overflow at n >= 17
+    struct rlimit rl;
+    getrlimit(RLIMIT_STACK, &rl);
+    rl.rlim_cur = RLIM_INFINITY;
+    setrlimit(RLIMIT_STACK, &rl);
+
     // initialize Lean runtime once
     lean_initialize_runtime_module();
     lean_object* res = initialize_differential__testing_SumcheckFFI(1);

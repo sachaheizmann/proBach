@@ -4,7 +4,7 @@ open Lake DSL
 package "differential_testing" where
   version := v!"0.1.0"
 
-require sumcheck from git "https://github.com/z-tech/sumcheck-lean4" @ "main"
+require sumcheck from git "https://github.com/z-tech/z-lean" @ "main"
 
 lean_lib MainShared where
   roots := #[`SumcheckFFI]
