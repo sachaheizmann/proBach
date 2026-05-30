@@ -1,13 +1,12 @@
-// supports old API only
-
 use std::io::Read;
 use ark_ff::fields::{Fp64, MontBackend, MontConfig};
-use ark_ff::{Zero, BigInteger, PrimeField};
+use ark_ff::{Zero, PrimeField};
 use ark_std::rand::SeedableRng;
 use ark_std::rand::rngs::StdRng;
-use effsc::runner::sumcheck;
 use effsc::provers::multilinear::MultilinearProver;
+use effsc::runner::sumcheck;
 use effsc::transcript::SanityTranscript;
+use std::panic;
 
 #[derive(MontConfig)]
 #[modulus = "19"]
@@ -40,26 +39,21 @@ pub struct GoldilocksConfig;
 pub type Goldilocks = Fp64<MontBackend<GoldilocksConfig, 1>>;
 
 const MODULI: [u64; 5] = [19, 2147483647, 2013265921, 2130706433, 18446744069414584321];
+const MAX_N: usize = 24;
+const MAX_TERMS: usize = 256;
 
+// MSB ordering, matching lib.rs
 fn all_boolean_points(n: usize) -> Vec<Vec<u64>> {
     let total = 1usize << n;
     (0..total)
-        .map(|i| (0..n).map(|bit| ((i >> bit) & 1) as u64).collect())
+        .map(|i| (0..n).map(|bit| ((i >> (n - 1 - bit)) & 1) as u64).collect())
         .collect()
 }
 
-fn run<F: ark_ff::Field + ark_ff::Zero + ark_ff::One + Copy + std::iter::Sum>(
-    evaluations: Vec<F>, seed: u64
-) where F: ark_ff::PrimeField {
-    let mut evals = evaluations;
-    let mut rng = StdRng::seed_from_u64(seed);
-    let mut transcript = SanityTranscript::new(&mut rng);
-    let _ = multilinear_sumcheck::<F, F>(&mut evals, &mut transcript);
-}
-
+// Same sumcheck call as lib.rs
 macro_rules! build_and_run {
     ($F:ty, $terms:expr, $points:expr, $seed:expr) => {{
-        let evals: Vec<$F> = $points.iter().map(|p| {
+        let evaluations: Vec<$F> = $points.iter().map(|p| {
             let mut r = <$F>::zero();
             for (coeff, exps) in &$terms {
                 let mut v = <$F>::from(*coeff);
@@ -70,48 +64,65 @@ macro_rules! build_and_run {
             }
             r
         }).collect();
-        let mut evals2 = evals;
-        let mut rng = StdRng::seed_from_u64($seed);
-        let mut transcript = SanityTranscript::new(&mut rng);
-        let _ = multilinear_sumcheck::<$F, $F>(&mut evals2, &mut transcript);
+        let _ = panic::catch_unwind(move || {
+            let mut prover = MultilinearProver::new(evaluations.clone());
+            let num_rounds = prover.num_variables();
+            let mut rng = StdRng::seed_from_u64($seed);
+            let mut transcript = SanityTranscript::new(&mut rng);
+            sumcheck(&mut prover, num_rounds, &mut transcript, |_, _| {})
+        });
     }};
 }
 
 fn main() {
     let mut data = Vec::new();
     std::io::stdin().read_to_end(&mut data).unwrap();
-    if data.len() < 3 { return; }
+    if data.len() < 18 { return; }
 
     let field_id = (data[0] % 5) as usize;
-    let n        = ((data[1] as usize) % 4) + 1;
-    let num_terms = ((data[2] as usize) % 8) + 1;
-    let modulus  = MODULI[field_id];
+    let n = ((data[1] as usize) % MAX_N) + 1;
+    let modulus = MODULI[field_id];
 
-    let mut pos = 3;
+    let exp_bytes = (n + 7) / 8;
+    let term_size = 8 + exp_bytes;
+
+    let mut pos = 2;
+    let remaining = if data.len() >= 8 + pos { data.len() - 8 - pos } else { 0 };
+    let mut num_terms = remaining / term_size;
+    if num_terms > MAX_TERMS { num_terms = MAX_TERMS; }
+    if num_terms == 0 { num_terms = 1; }
+
     let mut terms: Vec<(u64, Vec<u64>)> = Vec::new();
     for _ in 0..num_terms {
-        if pos >= data.len() { break; }
-        let coeff = data[pos] as u64 % modulus;
-        pos += 1;
-        let mut exps = Vec::new();
-        for _ in 0..n {
-            exps.push(if pos < data.len() { let e = (data[pos] & 1) as u64; pos += 1; e } else { 0 });
+        let mut coeff: u64 = 0;
+        for b in 0..8 {
+            let byte = if pos < data.len() { data[pos] } else { 0 };
+            coeff |= (byte as u64) << (8 * b);
+            pos += 1;
         }
+        coeff %= modulus;
+
+        let mut exps = vec![0u64; n];
+        for v in 0..n {
+            let byte_idx = v / 8;
+            let bit_idx = v % 8;
+            let byte = if pos + byte_idx < data.len() { data[pos + byte_idx] } else { 0 };
+            exps[v] = ((byte >> bit_idx) & 1) as u64;
+        }
+        pos += exp_bytes;
         terms.push((coeff, exps));
     }
-    if terms.is_empty() { terms.push((1, vec![0; n])); }
 
     let seed = if data.len() >= 8 {
-        u64::from_le_bytes(data[data.len()-8..].try_into().unwrap_or([0;8]))
+        u64::from_le_bytes(data[data.len()-8..].try_into().unwrap_or([0; 8]))
     } else { 42 };
 
     let points = all_boolean_points(n);
-
     match field_id {
-        0 => build_and_run!(F19,        terms, points, seed),
-        1 => build_and_run!(M31,        terms, points, seed),
-        2 => build_and_run!(BabyBear,   terms, points, seed),
-        3 => build_and_run!(KoalaBear,  terms, points, seed),
+        0 => build_and_run!(F19, terms, points, seed),
+        1 => build_and_run!(M31, terms, points, seed),
+        2 => build_and_run!(BabyBear, terms, points, seed),
+        3 => build_and_run!(KoalaBear, terms, points, seed),
         4 => build_and_run!(Goldilocks, terms, points, seed),
         _ => {}
     }
