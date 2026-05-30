@@ -18,12 +18,13 @@ crate-type = ["cdylib", "rlib"]
 name = "epfl_sumcheck"
 path = "src/main.rs"
 
+[[bin]]
+name = "cov_target"
+path = "src/cov_target.rs"
+
 #supports only the old api
 
 # [[bin]]
 # name = "fuzz_target"
 # path = "src/fuzz_target.rs"
 
-# [[bin]]
-# name = "cov_target"
-# path = "src/cov_target.rs"
