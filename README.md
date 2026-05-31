@@ -1,6 +1,6 @@
 # Sumcheck Differential Fuzzer
 
-A differential fuzzing framework that tests the [EPFL sumcheck library](https://github.com/compsec-epfl/efficient-sumcheck) against a formally verified [Lean4 oracle](https://github.com/z-tech/sumcheck-lean4).
+A differential fuzzing framework that tests the [EPFL sumcheck library](https://github.com/compsec-epfl/efficient-sumcheck) against a formally verified [Lean4 oracle](https://github.com/z-tech/z-lean).
 
 ## Overview
 
@@ -27,8 +27,8 @@ Each field has a dedicated Lean oracle (`computeTranscriptZ19`, `computeTranscri
 ## Known Limitations
 
 **Input size:**
-- Polynomials are capped at `MAX_N=24` variables and `MAX_TERMS=8` monomials
-- At `n=24`, each test case takes ~10 seconds, AFL++ speed drops significantly for large `n`
+- Polynomials are capped at `MAX_N=24` variables and `MAX_TERMS=256` monomials
+- At `n=24`, each test case takes ~13 seconds, AFL++ speed drops significantly for large `n`
 
 **Protocol coverage:**
 - Only `MultilinearProver` is tested, `InnerProductProver`, `CoefficientProver`, `SpaceProver` and `BlendyProver` are not covered
@@ -170,9 +170,11 @@ cat /tmp/afl_mismatch.txt
 ```
 
 ## Results
-to be done
-
+After 24 hours with 4 parallel workers on a 16-core AMD EPYC server (32 GB RAM):
+- 1.5 million test executions
+- 0 semantic mismatches
+- 83% region coverage of the EPFL sumcheck source (all uncovered regions are dead code for power-of-two evaluation tables)
 ## Acknowledgements
 
 - [EPFL compsec lab](https://github.com/compsec-epfl/efficient-sumcheck) for the Rust sumcheck implementation
-- [z-tech/sumcheck-lean4](https://github.com/z-tech/sumcheck-lean4) for the formally verified Lean4 oracle with machine-checked proofs of completeness and soundness
+- [z-tech/sumcheck-lean4](https://github.com/z-tech/z-lean) for the formally verified Lean4 oracle with machine-checked proofs of completeness and soundness
